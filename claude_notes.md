@@ -19,6 +19,11 @@ Task Log
 | Task 2c — silver_to_gold.py | 2026-05-24 18:16 | 2026-05-24 18:18 | Challenge: First silver design used array columns which violate 1NF. Required a redesign of bronze_to_silver to cross-explode genre × platform × store. |
 |  |  |  | Solution: Exploded all 3 array columns creating 331,695 rows (20× multiplication from 16,000). Gold tables use DISTINCT selects to recover clean many-to-many relationships. |
 |  |  |  | Improvement: For multi-dimensional 1NF explosion, document the expected row multiplication factor upfront so downstream queries know to use DISTINCT. |
+| Task 3 — visualization (Evidence.dev) | 2026-05-24 18:41 | 2026-05-24 19:00 | Challenge 1: Evidence.dev v40 base path for GitHub Pages. Asset paths in built output are absolute (`/_app/…`) and break when served at `/de_project_1_v2/`. |
+|  |  |  | Solution: Added a CI step in deploy.yml that patches `deployment.basePath` in evidence.config.yaml before the build, using the GitHub repo name dynamically. Keeps local dev at root URL. |
+|  |  |  | Challenge 2: Originally planned DuckDB file export (Azurite → .duckdb). User asked if direct Azurite reading was possible. DuckDB azure extension supports it locally but GitHub Actions cannot reach local Azurite. |
+|  |  |  | Solution: Simplified export_gold.py to download parquet files from Azurite into `sources/gold_data/`. Files committed to repo. Evidence DuckDB source uses `read_parquet()` on committed files. GitHub Actions builds against committed data. |
+|  |  |  | Improvement: For future gold layer refreshes, re-run export_gold.py and commit updated parquet files. Consider adding a CI trigger from real Azure Blob Storage if the project moves to cloud deployment. |
 
 =========================================================
 System Improvement Points

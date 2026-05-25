@@ -24,6 +24,16 @@ de_project_1_v3/
 │   └── silver_to_gold.py
 ├── visualization/
 │   ├── CONTEXT.md
+│   ├── export_gold.py
+│   ├── evidence.config.yaml
+│   ├── package.json
+│   ├── pages/
+│   │   └── index.md
+│   └── sources/
+│       └── gold_data/
+├── .github/
+│   └── workflows/
+│       └── deploy.yml
 └── claude_notes.md
 
 Create .env, .env.example, .gitignore, and README.md (Add it at the end once the visualization is done, then update this file).
