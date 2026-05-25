@@ -146,6 +146,17 @@ def transform(df):
             F.when(F.isnan(F.col(col_name)), None).otherwise(F.col(col_name)),
         )
 
+    # Value standardization
+    df = df.withColumn(
+        "platform_name",
+        F.when(F.col("platform_name") == "PC", "Windows").otherwise(F.col("platform_name")),
+    )
+    df = df.withColumn(
+        "esrb_name",
+        F.when(F.col("esrb_name").isNull() | (F.col("esrb_name") == "Not Rated"), "Everyone")
+        .otherwise(F.col("esrb_name")),
+    )
+
     return df
 
 
