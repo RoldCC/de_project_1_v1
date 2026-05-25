@@ -31,15 +31,7 @@ jobs:
         working-directory: visualization
 
       - name: Set base path for GitHub Pages
-        run: |
-          python3 -c "
-import yaml, os
-with open('evidence.config.yaml', 'r') as f:
-    c = yaml.safe_load(f)
-c.setdefault('deployment', {})['basePath'] = '/' + os.environ['REPO_NAME']
-with open('evidence.config.yaml', 'w') as f:
-    yaml.dump(c, f, default_flow_style=False)
-"
+        run: python3 -c "import yaml,os; c=yaml.safe_load(open('evidence.config.yaml')); c.setdefault('deployment',{})['basePath']='/'+os.environ['REPO_NAME']; yaml.safe_dump(c,open('evidence.config.yaml','w'))"
         env:
           REPO_NAME: ${{ github.event.repository.name }}
         working-directory: visualization
