@@ -7,7 +7,7 @@ from io import BytesIO
 import pyarrow as pa
 import pyarrow.parquet as pq
 from dotenv import load_dotenv
-from pyspark.sql import SparkSession, Window
+from pyspark.sql import SparkSession
 from pyspark.sql import functions as F
 
 load_dotenv()
@@ -42,11 +42,11 @@ def get_spark() -> SparkSession:
 # I/O
 # =========================================================
 
-def read_silver(spark: SparkSession):
+def read_silver_table(spark: SparkSession, blob_name: str):
     client = get_blob_service_client()
-    data = client.get_blob_client("silver", "silver_data.parquet").download_blob().readall()
+    data = client.get_blob_client("silver", blob_name).download_blob().readall()
     pandas_df = pq.read_table(BytesIO(data)).to_pandas()
-    logger.info("Silver loaded: %d rows, %d cols", len(pandas_df), len(pandas_df.columns))
+    logger.info("Loaded silver/%s — %d rows", blob_name, len(pandas_df))
     return spark.createDataFrame(pandas_df)
 
 
@@ -66,96 +66,44 @@ def write_gold(df, blob_name: str) -> None:
 
 
 # =========================================================
-# Dimension tables (native PySpark — no UDFs)
+# Gold tables (denormalized for dashboard — no ID lookups needed)
 # =========================================================
 
-def build_dim_game(silver):
-    # 2NF/3NF: all non-key attributes depend only on game_id
+def build_gold_games(dim_games, fact_metrics):
+    # One row per game: attributes + metrics joined, IDs and slug dropped (not needed by dashboard)
     return (
-        silver
-        .select("id", "slug", "name", "released", "tba", "esrb_name")
-        .distinct()
-        .withColumnRenamed("id", "game_id")
+        dim_games
+        .join(fact_metrics, "game_id", "inner")
+        .select(
+            "game_id", "name", "released", "esrb_name",
+            "rating", "playtime", "ratings_count", "reviews_text_count",
+            "reviews_count", "added",
+        )
     )
 
 
-def build_dim_genre(silver):
+def build_gold_game_genres(fact_genre, dim_genre):
+    # Names pre-joined — dashboard queries avoid extra dim table lookups
     return (
-        silver
-        .select("genre_name")
-        .filter(F.col("genre_name").isNotNull())
-        .distinct()
-        .withColumn("genre_id", F.row_number().over(Window.orderBy("genre_name")))
-        .select("genre_id", "genre_name")
+        fact_genre
+        .join(dim_genre, "genre_id", "inner")
+        .select("game_id", "genre_name")
     )
 
 
-def build_dim_platform(silver):
+def build_gold_game_platforms(fact_platform, dim_platform):
     return (
-        silver
-        .select("platform_name")
-        .filter(F.col("platform_name").isNotNull())
-        .distinct()
-        .withColumn("platform_id", F.row_number().over(Window.orderBy("platform_name")))
-        .select("platform_id", "platform_name")
+        fact_platform
+        .join(dim_platform, "platform_id", "inner")
+        .select("game_id", "platform_name")
     )
 
 
-def build_dim_store(silver):
+def build_gold_game_stores(fact_store, dim_store):
     return (
-        silver
-        .select("store_name")
-        .filter(F.col("store_name").isNotNull())
-        .distinct()
-        .withColumn("store_id", F.row_number().over(Window.orderBy("store_name")))
-        .select("store_id", "store_name")
-    )
-
-
-# =========================================================
-# Fact tables
-# =========================================================
-
-def build_fact_game_metrics(silver):
-    # One row per game — DISTINCT removes duplicates introduced by the 1NF explosion
-    return (
-        silver
-        .select("id", "rating", "ratings_count", "reviews_text_count", "added", "playtime", "reviews_count")
-        .distinct()
-        .withColumnRenamed("id", "game_id")
-    )
-
-
-def build_fact_game_genre(silver, dim_genre):
-    return (
-        silver
-        .select(F.col("id").alias("game_id"), "genre_name")
-        .filter(F.col("genre_name").isNotNull())
-        .distinct()
-        .join(dim_genre, "genre_name", "left")
-        .select("game_id", "genre_id")
-    )
-
-
-def build_fact_game_platform(silver, dim_platform):
-    return (
-        silver
-        .select(F.col("id").alias("game_id"), "platform_name")
-        .filter(F.col("platform_name").isNotNull())
-        .distinct()
-        .join(dim_platform, "platform_name", "left")
-        .select("game_id", "platform_id")
-    )
-
-
-def build_fact_game_store(silver, dim_store):
-    return (
-        silver
-        .select(F.col("id").alias("game_id"), "store_name")
-        .filter(F.col("store_name").isNotNull())
-        .distinct()
-        .join(dim_store, "store_name", "left")
-        .select("game_id", "store_id")
+        fact_store
+        .join(dim_store, "store_id", "inner")
+        .select("game_id", "store_name")
     )
 
 
@@ -166,23 +114,21 @@ def build_fact_game_store(silver, dim_store):
 def main() -> None:
     spark = get_spark()
 
-    silver = read_silver(spark)
-    silver.cache()
-
-    logger.info("Building dimension tables...")
-    dim_genre    = build_dim_genre(silver).cache()
-    dim_platform = build_dim_platform(silver).cache()
-    dim_store    = build_dim_store(silver).cache()
+    # Read silver normalized tables
+    dim_games     = read_silver_table(spark, "silver_dim_games.parquet").cache()
+    dim_genre     = read_silver_table(spark, "silver_dim_genre.parquet").cache()
+    dim_platform  = read_silver_table(spark, "silver_dim_platform.parquet").cache()
+    dim_store     = read_silver_table(spark, "silver_dim_store.parquet").cache()
+    fact_metrics  = read_silver_table(spark, "silver_fact_game_metrics.parquet").cache()
+    fact_genre    = read_silver_table(spark, "silver_fact_game_genre.parquet").cache()
+    fact_platform = read_silver_table(spark, "silver_fact_game_platform.parquet").cache()
+    fact_store    = read_silver_table(spark, "silver_fact_game_store.parquet").cache()
 
     tables = {
-        "dim_game.parquet":            build_dim_game(silver),
-        "dim_genre.parquet":           dim_genre,
-        "dim_platform.parquet":        dim_platform,
-        "dim_store.parquet":           dim_store,
-        "fact_game_metrics.parquet":   build_fact_game_metrics(silver),
-        "fact_game_genre.parquet":     build_fact_game_genre(silver, dim_genre),
-        "fact_game_platform.parquet":  build_fact_game_platform(silver, dim_platform),
-        "fact_game_store.parquet":     build_fact_game_store(silver, dim_store),
+        "gold_games.parquet":          build_gold_games(dim_games, fact_metrics),
+        "gold_game_genres.parquet":    build_gold_game_genres(fact_genre, dim_genre),
+        "gold_game_platforms.parquet": build_gold_game_platforms(fact_platform, dim_platform),
+        "gold_game_stores.parquet":    build_gold_game_stores(fact_store, dim_store),
     }
 
     logger.info("Writing %d gold tables...", len(tables))

@@ -16,10 +16,10 @@ RAWG API
 Bronze Layer (Azurite)          raw JSON-serialized parquet — 16,000 games, 19 MB
    │  bronze_to_silver.py
    ▼
-Silver Layer (Azurite)          1NF explosion (genre × platform × store) — 331,695 rows, 3.6 MB
+Silver Layer (Azurite)          8 normalized 3NF tables (dim + fact) — genre × platform × store exploded
    │  silver_to_gold.py
    ▼
-Gold Layer (Azurite)            star schema — 8 parquet tables
+Gold Layer (Azurite)            4 denormalized tables (names pre-joined, dashboard-ready)
    │  export_gold.py
    ▼
 visualization/sources/gold_data/    committed parquet files read by Evidence at build time
@@ -47,7 +47,7 @@ GitHub Pages                    static Evidence.dev dashboard
 ## Project Structure
 
 ```
-de_project_1/
+de_project_1_v3/
 ├── data_environment_structure/
 │   ├── docker-compose.yml          Azurite container
 │   └── utils.py                    Blob client helpers
@@ -73,18 +73,17 @@ de_project_1/
 
 ---
 
-## Gold Schema (star schema)
+## Gold Schema (denormalized — dashboard-ready)
 
-| Table | Rows | Description |
-|-------|------|-------------|
-| `dim_game` | 15,072 | game_id, slug, name, released, tba, esrb_name |
-| `dim_genre` | 19 | genre_id, genre_name |
-| `dim_platform` | 50 | platform_id, platform_name |
-| `dim_store` | 10 | store_id, store_name |
-| `fact_game_metrics` | 15,072 | rating, playtime, ratings_count, reviews_count |
-| `fact_game_genre` | 39,988 | game_id ↔ genre_id |
-| `fact_game_platform` | 40,650 | game_id ↔ platform_id |
-| `fact_game_store` | 31,017 | game_id ↔ store_id |
+Silver holds 8 normalized 3NF tables (dim_games, dim_genre, dim_platform, dim_store + 4 fact bridge tables).  
+Gold joins names in at the silver→gold step so dashboard queries need no extra lookups.
+
+| Table | Rows | Columns |
+|-------|------|---------|
+| `gold_games` | 15,072 | game_id, name, released, esrb_name, rating, playtime, ratings_count, reviews_text_count, reviews_count, added |
+| `gold_game_genres` | 39,988 | game_id, genre_name |
+| `gold_game_platforms` | 40,650 | game_id, platform_name |
+| `gold_game_stores` | 31,017 | game_id, store_name |
 
 ---
 

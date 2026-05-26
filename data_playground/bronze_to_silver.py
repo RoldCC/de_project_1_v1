@@ -7,7 +7,7 @@ from io import BytesIO
 import pyarrow as pa
 import pyarrow.parquet as pq
 from dotenv import load_dotenv
-from pyspark.sql import SparkSession
+from pyspark.sql import SparkSession, Window
 from pyspark.sql import functions as F
 from pyspark.sql.types import (
     ArrayType, IntegerType, StringType, StructField, StructType,
@@ -35,7 +35,6 @@ DROP_COLS = {
     "ratings", "tags",
 }
 
-# Minimal schemas — only fields we keep
 GENRE_SCHEMA = ArrayType(StructType([
     StructField("name", StringType()),
 ]))
@@ -83,16 +82,17 @@ def read_bronze(spark: SparkSession):
     return spark.createDataFrame(pandas_df)
 
 
-def write_silver(df) -> None:
+def write_silver_table(df, blob_name: str) -> None:
+    row_count = df.count()
     pandas_df = df.toPandas()
     table = pa.Table.from_pandas(pandas_df)
     with tempfile.NamedTemporaryFile(suffix=".parquet", delete=False) as tmp:
         pq.write_table(table, tmp.name)
         tmp_path = tmp.name
     try:
-        upload_to_layer(tmp_path, "silver", "silver_data.parquet")
+        upload_to_layer(tmp_path, "silver", blob_name)
         size_mb = os.path.getsize(tmp_path) / 1e6
-        logger.info("silver_data.parquet uploaded — %.2f MB", size_mb)
+        logger.info("%s — %d rows, %.2f MB", blob_name, row_count, size_mb)
     finally:
         os.unlink(tmp_path)
 
@@ -102,7 +102,6 @@ def write_silver(df) -> None:
 # =========================================================
 
 def transform(df):
-    # Drop unwanted columns
     to_drop = [c for c in df.columns if c in DROP_COLS]
     df = df.drop(*to_drop)
     logger.info("Dropped %d columns: %s", len(to_drop), to_drop)
@@ -121,13 +120,9 @@ def transform(df):
         F.explode(F.transform(F.from_json(F.col("stores"), STORE_SCHEMA), lambda x: x["store"]["name"])),
     )
 
-    # Parse esrb_rating dict → single name string
     df = df.withColumn("esrb_name", F.get_json_object(F.col("esrb_rating"), "$.name"))
-
-    # Drop original JSON string columns
     df = df.drop("genres", "platforms", "stores", "esrb_rating")
 
-    # Cast released to DateType (ISO 8601 yyyy-MM-dd)
     df = df.withColumn("released", F.to_date(F.col("released"), "yyyy-MM-dd"))
 
     # Standardize nulls: empty / whitespace-only strings → null
@@ -146,7 +141,6 @@ def transform(df):
             F.when(F.isnan(F.col(col_name)), None).otherwise(F.col(col_name)),
         )
 
-    # Value standardization
     df = df.withColumn(
         "platform_name",
         F.when(F.col("platform_name") == "PC", "Windows").otherwise(F.col("platform_name")),
@@ -170,10 +164,102 @@ def dedup(df):
     after = df.count()
     dupes = before - after
     if dupes:
-        logger.warning("Removed %d duplicate game IDs", dupes)
+        logger.warning("Removed %d duplicate rows", dupes)
     else:
         logger.info("No duplicates found (%d rows)", before)
     return df
+
+
+# =========================================================
+# Silver dimension tables (1NF → 3NF)
+# =========================================================
+
+def build_silver_dim_games(df):
+    return (
+        df
+        .select("id", "slug", "name", "released", "tba", "esrb_name")
+        .distinct()
+        .withColumnRenamed("id", "game_id")
+    )
+
+
+def build_silver_dim_genre(df):
+    return (
+        df
+        .select("genre_name")
+        .filter(F.col("genre_name").isNotNull())
+        .distinct()
+        .withColumn("genre_id", F.row_number().over(Window.orderBy("genre_name")))
+        .select("genre_id", "genre_name")
+    )
+
+
+def build_silver_dim_platform(df):
+    return (
+        df
+        .select("platform_name")
+        .filter(F.col("platform_name").isNotNull())
+        .distinct()
+        .withColumn("platform_id", F.row_number().over(Window.orderBy("platform_name")))
+        .select("platform_id", "platform_name")
+    )
+
+
+def build_silver_dim_store(df):
+    return (
+        df
+        .select("store_name")
+        .filter(F.col("store_name").isNotNull())
+        .distinct()
+        .withColumn("store_id", F.row_number().over(Window.orderBy("store_name")))
+        .select("store_id", "store_name")
+    )
+
+
+# =========================================================
+# Silver fact tables
+# =========================================================
+
+def build_silver_fact_game_metrics(df):
+    return (
+        df
+        .select("id", "rating", "ratings_count", "reviews_text_count", "added", "playtime", "reviews_count")
+        .distinct()
+        .withColumnRenamed("id", "game_id")
+    )
+
+
+def build_silver_fact_game_genre(df, dim_genre):
+    return (
+        df
+        .select(F.col("id").alias("game_id"), "genre_name")
+        .filter(F.col("genre_name").isNotNull())
+        .distinct()
+        .join(dim_genre, "genre_name", "left")
+        .select("game_id", "genre_id")
+    )
+
+
+def build_silver_fact_game_platform(df, dim_platform):
+    return (
+        df
+        .select(F.col("id").alias("game_id"), "platform_name")
+        .filter(F.col("platform_name").isNotNull())
+        .distinct()
+        .join(dim_platform, "platform_name", "left")
+        .select("game_id", "platform_id")
+    )
+
+
+def build_silver_fact_game_store(df, dim_store):
+    return (
+        df
+        .select(F.col("id").alias("game_id"), "store_name")
+        .filter(F.col("store_name").isNotNull())
+        .distinct()
+        .join(dim_store, "store_name", "left")
+        .select("game_id", "store_id")
+    )
 
 
 # =========================================================
@@ -186,13 +272,33 @@ def main() -> None:
     df = read_bronze(spark)
     df = transform(df)
     df = dedup(df)
+    df.cache()
 
-    logger.info("Silver schema:")
+    logger.info("Flat silver schema:")
     df.printSchema()
-    logger.info("Silver row count: %d", df.count())
+    logger.info("Flat silver row count: %d", df.count())
 
-    write_silver(df)
+    dim_genre    = build_silver_dim_genre(df).cache()
+    dim_platform = build_silver_dim_platform(df).cache()
+    dim_store    = build_silver_dim_store(df).cache()
+
+    tables = {
+        "silver_dim_games.parquet":           build_silver_dim_games(df),
+        "silver_dim_genre.parquet":           dim_genre,
+        "silver_dim_platform.parquet":        dim_platform,
+        "silver_dim_store.parquet":           dim_store,
+        "silver_fact_game_metrics.parquet":   build_silver_fact_game_metrics(df),
+        "silver_fact_game_genre.parquet":     build_silver_fact_game_genre(df, dim_genre),
+        "silver_fact_game_platform.parquet":  build_silver_fact_game_platform(df, dim_platform),
+        "silver_fact_game_store.parquet":     build_silver_fact_game_store(df, dim_store),
+    }
+
+    logger.info("Writing %d silver tables...", len(tables))
+    for blob_name, table_df in tables.items():
+        write_silver_table(table_df, blob_name)
+
     spark.stop()
+    logger.info("Silver layer complete.")
 
 
 if __name__ == "__main__":

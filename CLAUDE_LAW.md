@@ -2,6 +2,8 @@
 
 **Tradeoff:** These guidelines bias toward caution over speed. For trivial tasks, use judgment.
 
+- Create under a flexible, reversible and easy maintainable perspective.
+
 All the created code needs to be clear, with concise comments for specific complex lines and within all files if multiple code/text chucks divide them with subtitles:
 ```
 =========================================================

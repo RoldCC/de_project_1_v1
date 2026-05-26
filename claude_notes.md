@@ -25,6 +25,10 @@ Task Log
 |  |  |  | Solution: Simplified export_gold.py to download parquet files from Azurite into `sources/gold_data/`. Files committed to repo. Evidence DuckDB source uses `read_parquet()` on committed files. GitHub Actions builds against committed data. |
 |  |  |  | Improvement: For future gold layer refreshes, re-run export_gold.py and commit updated parquet files. Consider adding a CI trigger from real Azure Blob Storage if the project moves to cloud deployment. |
 
+| silver/gold restructure — move normalization to silver layer, denormalize gold for dashboard | 2026-05-26 | 2026-05-26 | Challenge: bronze_to_silver.py was writing a single flat file; normalization logic lived in the wrong layer (silver_to_gold.py). Gold files lacked gold_ prefix and used complex multi-dim-table JOINs in dashboard queries, increasing timeout risk. |
+|  |  |  | Solution: Moved all fact/dim normalization into bronze_to_silver.py (8 silver tables). Rewrote silver_to_gold.py to read silver tables and produce 4 denormalized gold tables (names pre-joined, no ID lookups in dashboard). Updated export_gold.py and index.md accordingly. Deleted 16 stale parquet/sql files from sources/gold_data/. |
+|  |  |  | Improvement: Define the layer boundary explicitly upfront — silver = normalized 3NF, gold = dashboard-ready denormalized. Prevents normalization logic drifting into the wrong layer. |
+
 =========================================================
 System Improvement Points
 =========================================================

@@ -22,14 +22,10 @@ logger = logging.getLogger(__name__)
 # =========================================================
 
 TABLES = [
-    "dim_game",
-    "dim_genre",
-    "dim_platform",
-    "dim_store",
-    "fact_game_metrics",
-    "fact_game_genre",
-    "fact_game_platform",
-    "fact_game_store",
+    "gold_games",
+    "gold_game_genres",
+    "gold_game_platforms",
+    "gold_game_stores",
 ]
 
 DEST_DIR = os.path.join(os.path.dirname(__file__), "sources", "gold_data")

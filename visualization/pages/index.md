@@ -12,23 +12,21 @@ A star-schema view of **{kpis[0].total_games}** video games from the RAWG public
 
 ```sql year_options
 SELECT DISTINCT CAST(DATE_PART('year', released)::INTEGER AS VARCHAR) AS release_year
-FROM gold_data.dim_game
+FROM gold_data.gold_games
 WHERE released IS NOT NULL
 ORDER BY release_year DESC
 ```
 
 ```sql genre_options
-SELECT DISTINCT genre_name FROM gold_data.dim_genre ORDER BY genre_name
+SELECT DISTINCT genre_name FROM gold_data.gold_game_genres ORDER BY genre_name
 ```
 
 ```sql platform_options
-SELECT DISTINCT platform_name FROM gold_data.dim_platform ORDER BY platform_name
+SELECT DISTINCT platform_name FROM gold_data.gold_game_platforms ORDER BY platform_name
 ```
 
 ```sql esrb_options
-SELECT DISTINCT COALESCE(esrb_name, 'Everyone') AS esrb_name
-FROM gold_data.dim_game
-ORDER BY esrb_name
+SELECT DISTINCT esrb_name FROM gold_data.gold_games ORDER BY esrb_name
 ```
 
 <Dropdown name=year_release data={year_options} value=release_year label=release_year title="Release Year">
@@ -53,27 +51,18 @@ ORDER BY esrb_name
 
 ```sql kpis
 SELECT
-    COUNT(DISTINCT fgm.game_id)                                           AS total_games,
-    ROUND(MEDIAN(CASE WHEN fgm.rating   > 0 THEN fgm.rating   END), 2)   AS median_rating,
-    ROUND(MEDIAN(CASE WHEN fgm.playtime > 0 THEN fgm.playtime END), 1)   AS median_playtime_hrs,
-    COUNT(DISTINCT fgg.genre_id)                                          AS total_genres,
-    COUNT(DISTINCT fgp.platform_id)                                       AS total_platforms
-FROM gold_data.fact_game_metrics   fgm
-JOIN gold_data.dim_game            dg  ON fgm.game_id    = dg.game_id
-LEFT JOIN gold_data.fact_game_genre    fgg ON fgm.game_id = fgg.game_id
-LEFT JOIN gold_data.fact_game_platform fgp ON fgm.game_id = fgp.game_id
-WHERE fgm.game_id IN (
-    SELECT fgg2.game_id FROM gold_data.fact_game_genre fgg2
-    JOIN gold_data.dim_genre dgn ON fgg2.genre_id = dgn.genre_id
-    WHERE dgn.genre_name LIKE '${inputs.genre.value}'
-)
-AND fgm.game_id IN (
-    SELECT fgp2.game_id FROM gold_data.fact_game_platform fgp2
-    JOIN gold_data.dim_platform dp ON fgp2.platform_id = dp.platform_id
-    WHERE dp.platform_name LIKE '${inputs.platform.value}'
-)
-AND COALESCE(dg.esrb_name, 'Everyone') LIKE '${inputs.esrb.value}'
-AND COALESCE(CAST(DATE_PART('year', dg.released)::INTEGER AS VARCHAR), '%') LIKE '${inputs.year_release.value}'
+    COUNT(DISTINCT g.game_id)                                            AS total_games,
+    ROUND(MEDIAN(CASE WHEN g.rating   > 0 THEN g.rating   END), 2)      AS median_rating,
+    ROUND(MEDIAN(CASE WHEN g.playtime > 0 THEN g.playtime END), 1)      AS median_playtime_hrs,
+    COUNT(DISTINCT gg.genre_name)                                        AS total_genres,
+    COUNT(DISTINCT gp.platform_name)                                     AS total_platforms
+FROM gold_data.gold_games g
+LEFT JOIN gold_data.gold_game_genres    gg ON g.game_id = gg.game_id
+LEFT JOIN gold_data.gold_game_platforms gp ON g.game_id = gp.game_id
+WHERE g.game_id IN (SELECT game_id FROM gold_data.gold_game_genres    WHERE genre_name    LIKE '${inputs.genre.value}')
+AND   g.game_id IN (SELECT game_id FROM gold_data.gold_game_platforms WHERE platform_name LIKE '${inputs.platform.value}')
+AND   g.esrb_name LIKE '${inputs.esrb.value}'
+AND   COALESCE(CAST(DATE_PART('year', g.released)::INTEGER AS VARCHAR), '%') LIKE '${inputs.year_release.value}'
 ```
 
 <Grid cols=5>
@@ -93,22 +82,16 @@ AND COALESCE(CAST(DATE_PART('year', dg.released)::INTEGER AS VARCHAR), '%') LIKE
 ```sql top_genres
 -- filtered by platform + esrb + year (genre chart is not self-filtered)
 SELECT
-    dgn.genre_name,
-    COUNT(DISTINCT fgg.game_id) AS game_count
-FROM gold_data.fact_game_genre fgg
-JOIN gold_data.dim_genre dgn ON fgg.genre_id = dgn.genre_id
-WHERE fgg.game_id IN (
-    SELECT fgp2.game_id FROM gold_data.fact_game_platform fgp2
-    JOIN gold_data.dim_platform dp ON fgp2.platform_id = dp.platform_id
-    WHERE dp.platform_name LIKE '${inputs.platform.value}'
+    gg.genre_name,
+    COUNT(DISTINCT gg.game_id) AS game_count
+FROM gold_data.gold_game_genres gg
+WHERE gg.game_id IN (SELECT game_id FROM gold_data.gold_game_platforms WHERE platform_name LIKE '${inputs.platform.value}')
+AND   gg.game_id IN (
+    SELECT g.game_id FROM gold_data.gold_games g
+    WHERE g.esrb_name LIKE '${inputs.esrb.value}'
+    AND COALESCE(CAST(DATE_PART('year', g.released)::INTEGER AS VARCHAR), '%') LIKE '${inputs.year_release.value}'
 )
-AND fgg.game_id IN (
-    SELECT fgm.game_id FROM gold_data.fact_game_metrics fgm
-    JOIN gold_data.dim_game dg ON fgm.game_id = dg.game_id
-    WHERE COALESCE(dg.esrb_name, 'Everyone') LIKE '${inputs.esrb.value}'
-    AND COALESCE(CAST(DATE_PART('year', dg.released)::INTEGER AS VARCHAR), '%') LIKE '${inputs.year_release.value}'
-)
-GROUP BY dgn.genre_name
+GROUP BY gg.genre_name
 ORDER BY game_count DESC
 LIMIT 10
 ```
@@ -116,22 +99,16 @@ LIMIT 10
 ```sql top_platforms
 -- filtered by genre + esrb + year (platform chart is not self-filtered)
 SELECT
-    dp.platform_name,
-    COUNT(DISTINCT fgp.game_id) AS game_count
-FROM gold_data.fact_game_platform fgp
-JOIN gold_data.dim_platform dp ON fgp.platform_id = dp.platform_id
-WHERE fgp.game_id IN (
-    SELECT fgg2.game_id FROM gold_data.fact_game_genre fgg2
-    JOIN gold_data.dim_genre dgn ON fgg2.genre_id = dgn.genre_id
-    WHERE dgn.genre_name LIKE '${inputs.genre.value}'
+    gp.platform_name,
+    COUNT(DISTINCT gp.game_id) AS game_count
+FROM gold_data.gold_game_platforms gp
+WHERE gp.game_id IN (SELECT game_id FROM gold_data.gold_game_genres WHERE genre_name LIKE '${inputs.genre.value}')
+AND   gp.game_id IN (
+    SELECT g.game_id FROM gold_data.gold_games g
+    WHERE g.esrb_name LIKE '${inputs.esrb.value}'
+    AND COALESCE(CAST(DATE_PART('year', g.released)::INTEGER AS VARCHAR), '%') LIKE '${inputs.year_release.value}'
 )
-AND fgp.game_id IN (
-    SELECT fgm.game_id FROM gold_data.fact_game_metrics fgm
-    JOIN gold_data.dim_game dg ON fgm.game_id = dg.game_id
-    WHERE COALESCE(dg.esrb_name, 'Everyone') LIKE '${inputs.esrb.value}'
-    AND COALESCE(CAST(DATE_PART('year', dg.released)::INTEGER AS VARCHAR), '%') LIKE '${inputs.year_release.value}'
-)
-GROUP BY dp.platform_name
+GROUP BY gp.platform_name
 ORDER BY game_count DESC
 LIMIT 10
 ```
@@ -168,51 +145,34 @@ LIMIT 10
 
 ```sql genre_platform_matrix
 SELECT
-    dgn.genre_name,
-    dp.platform_name,
-    COUNT(DISTINCT fgg.game_id) AS game_count
-FROM gold_data.fact_game_genre fgg
-JOIN gold_data.dim_genre dgn ON fgg.genre_id = dgn.genre_id
-JOIN gold_data.fact_game_platform fgp ON fgg.game_id = fgp.game_id
-JOIN gold_data.dim_platform dp ON fgp.platform_id = dp.platform_id
-WHERE fgg.game_id IN (
-    SELECT fgp2.game_id FROM gold_data.fact_game_platform fgp2
-    JOIN gold_data.dim_platform dp2 ON fgp2.platform_id = dp2.platform_id
-    WHERE dp2.platform_name LIKE '${inputs.platform.value}'
+    gg.genre_name,
+    gp.platform_name,
+    COUNT(DISTINCT gg.game_id) AS game_count
+FROM gold_data.gold_game_genres gg
+JOIN gold_data.gold_game_platforms gp ON gg.game_id = gp.game_id
+WHERE gg.game_id IN (SELECT game_id FROM gold_data.gold_game_genres    WHERE genre_name    LIKE '${inputs.genre.value}')
+AND   gg.game_id IN (SELECT game_id FROM gold_data.gold_game_platforms WHERE platform_name LIKE '${inputs.platform.value}')
+AND   gg.game_id IN (
+    SELECT g.game_id FROM gold_data.gold_games g
+    WHERE g.esrb_name LIKE '${inputs.esrb.value}'
+    AND COALESCE(CAST(DATE_PART('year', g.released)::INTEGER AS VARCHAR), '%') LIKE '${inputs.year_release.value}'
 )
-AND fgg.game_id IN (
-    SELECT fgg2.game_id FROM gold_data.fact_game_genre fgg2
-    JOIN gold_data.dim_genre dgn2 ON fgg2.genre_id = dgn2.genre_id
-    WHERE dgn2.genre_name LIKE '${inputs.genre.value}'
-)
-AND fgg.game_id IN (
-    SELECT fgm.game_id FROM gold_data.fact_game_metrics fgm
-    JOIN gold_data.dim_game dg ON fgm.game_id = dg.game_id
-    WHERE COALESCE(dg.esrb_name, 'Everyone') LIKE '${inputs.esrb.value}'
-    AND COALESCE(CAST(DATE_PART('year', dg.released)::INTEGER AS VARCHAR), '%') LIKE '${inputs.year_release.value}'
-)
-AND dgn.genre_name IN (
+AND gg.genre_name IN (
     SELECT genre_name FROM (
-        SELECT dgn3.genre_name, COUNT(DISTINCT fgg3.game_id) AS cnt
-        FROM gold_data.fact_game_genre fgg3
-        JOIN gold_data.dim_genre dgn3 ON fgg3.genre_id = dgn3.genre_id
-        GROUP BY dgn3.genre_name
-        ORDER BY cnt DESC
-        LIMIT 10
-    ) top_g
+        SELECT genre_name, COUNT(DISTINCT game_id) AS cnt
+        FROM gold_data.gold_game_genres
+        GROUP BY genre_name ORDER BY cnt DESC LIMIT 10
+    )
 )
-AND dp.platform_name IN (
+AND gp.platform_name IN (
     SELECT platform_name FROM (
-        SELECT dp3.platform_name, COUNT(DISTINCT fgp3.game_id) AS cnt
-        FROM gold_data.fact_game_platform fgp3
-        JOIN gold_data.dim_platform dp3 ON fgp3.platform_id = dp3.platform_id
-        GROUP BY dp3.platform_name
-        ORDER BY cnt DESC
-        LIMIT 8
-    ) top_p
+        SELECT platform_name, COUNT(DISTINCT game_id) AS cnt
+        FROM gold_data.gold_game_platforms
+        GROUP BY platform_name ORDER BY cnt DESC LIMIT 8
+    )
 )
-GROUP BY dgn.genre_name, dp.platform_name
-ORDER BY dgn.genre_name, game_count DESC
+GROUP BY gg.genre_name, gp.platform_name
+ORDER BY gg.genre_name, game_count DESC
 ```
 
 <BarChart
@@ -232,28 +192,14 @@ ORDER BY dgn.genre_name, game_count DESC
 
 ```sql games_per_year
 SELECT
-    DATE_PART('year', dg.released)::INTEGER AS release_year,
-    COUNT(DISTINCT fgm.game_id)             AS game_count
-FROM gold_data.fact_game_metrics fgm
-JOIN gold_data.dim_game dg ON fgm.game_id = dg.game_id
-WHERE dg.released IS NOT NULL
-AND DATE_PART('year', dg.released) >= (
-    SELECT MIN(DATE_PART('year', released))::INTEGER
-    FROM gold_data.dim_game
-    WHERE released IS NOT NULL
-)
-AND DATE_PART('year', dg.released) < 2029
-AND fgm.game_id IN (
-    SELECT fgg2.game_id FROM gold_data.fact_game_genre fgg2
-    JOIN gold_data.dim_genre dgn ON fgg2.genre_id = dgn.genre_id
-    WHERE dgn.genre_name LIKE '${inputs.genre.value}'
-)
-AND fgm.game_id IN (
-    SELECT fgp2.game_id FROM gold_data.fact_game_platform fgp2
-    JOIN gold_data.dim_platform dp ON fgp2.platform_id = dp.platform_id
-    WHERE dp.platform_name LIKE '${inputs.platform.value}'
-)
-AND COALESCE(dg.esrb_name, 'Everyone') LIKE '${inputs.esrb.value}'
+    DATE_PART('year', g.released)::INTEGER AS release_year,
+    COUNT(DISTINCT g.game_id)              AS game_count
+FROM gold_data.gold_games g
+WHERE g.released IS NOT NULL
+AND DATE_PART('year', g.released) < 2029
+AND g.game_id IN (SELECT game_id FROM gold_data.gold_game_genres    WHERE genre_name    LIKE '${inputs.genre.value}')
+AND g.game_id IN (SELECT game_id FROM gold_data.gold_game_platforms WHERE platform_name LIKE '${inputs.platform.value}')
+AND g.esrb_name LIKE '${inputs.esrb.value}'
 GROUP BY release_year
 ORDER BY release_year
 ```
@@ -274,23 +220,14 @@ ORDER BY release_year
 
 ```sql rating_dist
 SELECT
-    (ROUND(fgm.rating * 2) / 2)::DECIMAL(3,1) AS rating_bucket,
-    COUNT(DISTINCT fgm.game_id)               AS game_count
-FROM gold_data.fact_game_metrics fgm
-JOIN gold_data.dim_game dg ON fgm.game_id = dg.game_id
-WHERE fgm.rating > 0
-AND fgm.game_id IN (
-    SELECT fgg2.game_id FROM gold_data.fact_game_genre fgg2
-    JOIN gold_data.dim_genre dgn ON fgg2.genre_id = dgn.genre_id
-    WHERE dgn.genre_name LIKE '${inputs.genre.value}'
-)
-AND fgm.game_id IN (
-    SELECT fgp2.game_id FROM gold_data.fact_game_platform fgp2
-    JOIN gold_data.dim_platform dp ON fgp2.platform_id = dp.platform_id
-    WHERE dp.platform_name LIKE '${inputs.platform.value}'
-)
-AND COALESCE(dg.esrb_name, 'Everyone') LIKE '${inputs.esrb.value}'
-AND COALESCE(CAST(DATE_PART('year', dg.released)::INTEGER AS VARCHAR), '%') LIKE '${inputs.year_release.value}'
+    (ROUND(g.rating * 2) / 2)::DECIMAL(3,1) AS rating_bucket,
+    COUNT(DISTINCT g.game_id)               AS game_count
+FROM gold_data.gold_games g
+WHERE g.rating > 0
+AND g.game_id IN (SELECT game_id FROM gold_data.gold_game_genres    WHERE genre_name    LIKE '${inputs.genre.value}')
+AND g.game_id IN (SELECT game_id FROM gold_data.gold_game_platforms WHERE platform_name LIKE '${inputs.platform.value}')
+AND g.esrb_name LIKE '${inputs.esrb.value}'
+AND COALESCE(CAST(DATE_PART('year', g.released)::INTEGER AS VARCHAR), '%') LIKE '${inputs.year_release.value}'
 GROUP BY rating_bucket
 ORDER BY rating_bucket
 ```
@@ -311,50 +248,33 @@ ORDER BY rating_bucket
 
 ```sql rating_by_genre_platform
 SELECT
-    dgn.genre_name,
-    dp.platform_name,
-    ROUND(MEDIAN(CASE WHEN fgm.rating > 0 THEN fgm.rating END), 2) AS median_rating
-FROM gold_data.fact_game_metrics fgm
-JOIN gold_data.dim_game dg ON fgm.game_id = dg.game_id
-JOIN gold_data.fact_game_genre fgg ON fgm.game_id = fgg.game_id
-JOIN gold_data.dim_genre dgn ON fgg.genre_id = dgn.genre_id
-JOIN gold_data.fact_game_platform fgp ON fgm.game_id = fgp.game_id
-JOIN gold_data.dim_platform dp ON fgp.platform_id = dp.platform_id
-WHERE fgm.game_id IN (
-    SELECT fgg2.game_id FROM gold_data.fact_game_genre fgg2
-    JOIN gold_data.dim_genre dgn2 ON fgg2.genre_id = dgn2.genre_id
-    WHERE dgn2.genre_name LIKE '${inputs.genre.value}'
-)
-AND fgm.game_id IN (
-    SELECT fgp2.game_id FROM gold_data.fact_game_platform fgp2
-    JOIN gold_data.dim_platform dp2 ON fgp2.platform_id = dp2.platform_id
-    WHERE dp2.platform_name LIKE '${inputs.platform.value}'
-)
-AND COALESCE(dg.esrb_name, 'Everyone') LIKE '${inputs.esrb.value}'
-AND COALESCE(CAST(DATE_PART('year', dg.released)::INTEGER AS VARCHAR), '%') LIKE '${inputs.year_release.value}'
-AND dgn.genre_name IN (
+    gg.genre_name,
+    gp.platform_name,
+    ROUND(MEDIAN(CASE WHEN g.rating > 0 THEN g.rating END), 2) AS median_rating
+FROM gold_data.gold_games g
+JOIN gold_data.gold_game_genres    gg ON g.game_id = gg.game_id
+JOIN gold_data.gold_game_platforms gp ON g.game_id = gp.game_id
+WHERE g.game_id IN (SELECT game_id FROM gold_data.gold_game_genres    WHERE genre_name    LIKE '${inputs.genre.value}')
+AND   g.game_id IN (SELECT game_id FROM gold_data.gold_game_platforms WHERE platform_name LIKE '${inputs.platform.value}')
+AND   g.esrb_name LIKE '${inputs.esrb.value}'
+AND   COALESCE(CAST(DATE_PART('year', g.released)::INTEGER AS VARCHAR), '%') LIKE '${inputs.year_release.value}'
+AND gg.genre_name IN (
     SELECT genre_name FROM (
-        SELECT dgn3.genre_name, COUNT(DISTINCT fgg3.game_id) AS cnt
-        FROM gold_data.fact_game_genre fgg3
-        JOIN gold_data.dim_genre dgn3 ON fgg3.genre_id = dgn3.genre_id
-        GROUP BY dgn3.genre_name
-        ORDER BY cnt DESC
-        LIMIT 8
-    ) top_g
+        SELECT genre_name, COUNT(DISTINCT game_id) AS cnt
+        FROM gold_data.gold_game_genres
+        GROUP BY genre_name ORDER BY cnt DESC LIMIT 8
+    )
 )
-AND dp.platform_name IN (
+AND gp.platform_name IN (
     SELECT platform_name FROM (
-        SELECT dp3.platform_name, COUNT(DISTINCT fgp3.game_id) AS cnt
-        FROM gold_data.fact_game_platform fgp3
-        JOIN gold_data.dim_platform dp3 ON fgp3.platform_id = dp3.platform_id
-        GROUP BY dp3.platform_name
-        ORDER BY cnt DESC
-        LIMIT 5
-    ) top_p
+        SELECT platform_name, COUNT(DISTINCT game_id) AS cnt
+        FROM gold_data.gold_game_platforms
+        GROUP BY platform_name ORDER BY cnt DESC LIMIT 5
+    )
 )
-GROUP BY dgn.genre_name, dp.platform_name
-HAVING MEDIAN(CASE WHEN fgm.rating > 0 THEN fgm.rating END) IS NOT NULL
-ORDER BY dgn.genre_name, dp.platform_name
+GROUP BY gg.genre_name, gp.platform_name
+HAVING MEDIAN(CASE WHEN g.rating > 0 THEN g.rating END) IS NOT NULL
+ORDER BY gg.genre_name, gp.platform_name
 ```
 
 <BarChart
@@ -375,25 +295,16 @@ ORDER BY dgn.genre_name, dp.platform_name
 
 ```sql rating_vs_playtime
 SELECT
-    ROUND(fgm.rating, 2)               AS rating,
-    fgm.playtime                       AS playtime_hrs,
-    COALESCE(dg.esrb_name, 'Everyone') AS esrb
-FROM gold_data.fact_game_metrics fgm
-JOIN gold_data.dim_game dg ON fgm.game_id = dg.game_id
-WHERE fgm.rating > 0
-AND fgm.playtime > 0
-AND fgm.game_id IN (
-    SELECT fgg2.game_id FROM gold_data.fact_game_genre fgg2
-    JOIN gold_data.dim_genre dgn ON fgg2.genre_id = dgn.genre_id
-    WHERE dgn.genre_name LIKE '${inputs.genre.value}'
-)
-AND fgm.game_id IN (
-    SELECT fgp2.game_id FROM gold_data.fact_game_platform fgp2
-    JOIN gold_data.dim_platform dp ON fgp2.platform_id = dp.platform_id
-    WHERE dp.platform_name LIKE '${inputs.platform.value}'
-)
-AND COALESCE(dg.esrb_name, 'Everyone') LIKE '${inputs.esrb.value}'
-AND COALESCE(CAST(DATE_PART('year', dg.released)::INTEGER AS VARCHAR), '%') LIKE '${inputs.year_release.value}'
+    ROUND(g.rating, 2)  AS rating,
+    g.playtime          AS playtime_hrs,
+    g.esrb_name         AS esrb
+FROM gold_data.gold_games g
+WHERE g.rating > 0
+AND g.playtime > 0
+AND g.game_id IN (SELECT game_id FROM gold_data.gold_game_genres    WHERE genre_name    LIKE '${inputs.genre.value}')
+AND g.game_id IN (SELECT game_id FROM gold_data.gold_game_platforms WHERE platform_name LIKE '${inputs.platform.value}')
+AND g.esrb_name LIKE '${inputs.esrb.value}'
+AND COALESCE(CAST(DATE_PART('year', g.released)::INTEGER AS VARCHAR), '%') LIKE '${inputs.year_release.value}'
 ```
 
 <ScatterPlot
@@ -412,27 +323,17 @@ AND COALESCE(CAST(DATE_PART('year', dg.released)::INTEGER AS VARCHAR), '%') LIKE
 
 ```sql top_stores
 SELECT
-    ds.store_name,
-    COUNT(DISTINCT fgs.game_id) AS game_count
-FROM gold_data.fact_game_store fgs
-JOIN gold_data.dim_store ds ON fgs.store_id = ds.store_id
-WHERE fgs.game_id IN (
-    SELECT fgg2.game_id FROM gold_data.fact_game_genre fgg2
-    JOIN gold_data.dim_genre dgn ON fgg2.genre_id = dgn.genre_id
-    WHERE dgn.genre_name LIKE '${inputs.genre.value}'
+    gs.store_name,
+    COUNT(DISTINCT gs.game_id) AS game_count
+FROM gold_data.gold_game_stores gs
+WHERE gs.game_id IN (SELECT game_id FROM gold_data.gold_game_genres    WHERE genre_name    LIKE '${inputs.genre.value}')
+AND   gs.game_id IN (SELECT game_id FROM gold_data.gold_game_platforms WHERE platform_name LIKE '${inputs.platform.value}')
+AND   gs.game_id IN (
+    SELECT g.game_id FROM gold_data.gold_games g
+    WHERE g.esrb_name LIKE '${inputs.esrb.value}'
+    AND COALESCE(CAST(DATE_PART('year', g.released)::INTEGER AS VARCHAR), '%') LIKE '${inputs.year_release.value}'
 )
-AND fgs.game_id IN (
-    SELECT fgp2.game_id FROM gold_data.fact_game_platform fgp2
-    JOIN gold_data.dim_platform dp ON fgp2.platform_id = dp.platform_id
-    WHERE dp.platform_name LIKE '${inputs.platform.value}'
-)
-AND fgs.game_id IN (
-    SELECT fgm.game_id FROM gold_data.fact_game_metrics fgm
-    JOIN gold_data.dim_game dg ON fgm.game_id = dg.game_id
-    WHERE COALESCE(dg.esrb_name, 'Everyone') LIKE '${inputs.esrb.value}'
-    AND COALESCE(CAST(DATE_PART('year', dg.released)::INTEGER AS VARCHAR), '%') LIKE '${inputs.year_release.value}'
-)
-GROUP BY ds.store_name
+GROUP BY gs.store_name
 ORDER BY game_count DESC
 LIMIT 10
 ```
@@ -453,29 +354,20 @@ LIMIT 10
 
 ```sql top_games
 SELECT
-    dg.name                                       AS game,
-    DATE_PART('year', dg.released)::INTEGER       AS year,
-    COALESCE(dg.esrb_name, 'Everyone')            AS esrb,
-    ROUND(fgm.rating,        2)                   AS rating,
-    fgm.playtime                                  AS playtime_hrs,
-    fgm.ratings_count,
-    fgm.reviews_count
-FROM gold_data.fact_game_metrics fgm
-JOIN gold_data.dim_game dg ON fgm.game_id = dg.game_id
-WHERE fgm.rating > 0
-AND fgm.game_id IN (
-    SELECT fgg2.game_id FROM gold_data.fact_game_genre fgg2
-    JOIN gold_data.dim_genre dgn ON fgg2.genre_id = dgn.genre_id
-    WHERE dgn.genre_name LIKE '${inputs.genre.value}'
-)
-AND fgm.game_id IN (
-    SELECT fgp2.game_id FROM gold_data.fact_game_platform fgp2
-    JOIN gold_data.dim_platform dp ON fgp2.platform_id = dp.platform_id
-    WHERE dp.platform_name LIKE '${inputs.platform.value}'
-)
-AND COALESCE(dg.esrb_name, 'Everyone') LIKE '${inputs.esrb.value}'
-AND COALESCE(CAST(DATE_PART('year', dg.released)::INTEGER AS VARCHAR), '%') LIKE '${inputs.year_release.value}'
-ORDER BY fgm.rating DESC, fgm.ratings_count DESC
+    g.name                                         AS game,
+    DATE_PART('year', g.released)::INTEGER         AS year,
+    g.esrb_name                                    AS esrb,
+    ROUND(g.rating, 2)                             AS rating,
+    g.playtime                                     AS playtime_hrs,
+    g.ratings_count,
+    g.reviews_count
+FROM gold_data.gold_games g
+WHERE g.rating > 0
+AND g.game_id IN (SELECT game_id FROM gold_data.gold_game_genres    WHERE genre_name    LIKE '${inputs.genre.value}')
+AND g.game_id IN (SELECT game_id FROM gold_data.gold_game_platforms WHERE platform_name LIKE '${inputs.platform.value}')
+AND g.esrb_name LIKE '${inputs.esrb.value}'
+AND COALESCE(CAST(DATE_PART('year', g.released)::INTEGER AS VARCHAR), '%') LIKE '${inputs.year_release.value}'
+ORDER BY g.rating DESC, g.ratings_count DESC
 LIMIT 100
 ```
 
